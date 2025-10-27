@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Counter via BLE</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 50px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px;
+        }
+        #counts {
+            margin-top: 30px;
+        }
+        .count {
+            display: inline-block;
+            margin: 0 20px;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        #log {
+            margin-top: 20px;
+            text-align: left;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            background: #f9f9f9;
+            padding: 10px;
+            border: 1px solid #ddd;
+            height: 200px;
+            overflow-y: scroll;
+        }
+    </style>
+</head>
+<body>
+    <h1>ESP32 Ultrasonic Counter</h1>
+    <p>Connect to ESP32 via Bluetooth to view sensor counts.</p>
+    <button id="connectBtn">Connect to ESP32</button>
+    <button id="disconnectBtn" disabled>Disconnect</button>
+    <div id="counts" style="display: none;">
+        <div class="count">
+            <h2>Sensor 1 Count</h2>
+            <p id="count1">0</p>
+        </div>
+        <div class="count">
+            <h2>Sensor 2 Count</h2>
+            <p id="count2">0</p>
+        </div>
+    </div>
+    <p id="status">Status: Disconnected</p>
+    <div id="log"></div>
+
+    <script>
+        const SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+        const CHARACTERISTIC_UUID_COUNT1 = 'abcd1234-5678-1234-5678-123456789abc';
+        const CHARACTERISTIC_UUID_COUNT2 = 'abcd5678-5678-1234-5678-123456789abc';
+
+        let device = null;
+        let server = null;
+        let characteristic1 = null;
+        let characteristic2 = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const countsDiv = document.getElementById('counts');
+        const count1El = document.getElementById('count1');
+        const count2El = document.getElementById('count2');
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+
+        function log(message) {
+            logEl.textContent += new Date().toLocaleTimeString() + ': ' + message + '\n';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function connect() {
+            try {
+                log('Requesting Bluetooth device...');
+                // Request device with specific name and service UUID
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32 Counter' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                log('Device selected: ' + device.name);
+                statusEl.textContent = 'Status: Connecting...';
+                server = await device.gatt.connect();
+                log('GATT server connected');
+                statusEl.textContent = 'Status: Connected';
+
+                // Get service
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                log('Service found');
+
+                // Get characteristics
+                characteristic1 = await service.getCharacteristic(CHARACTERISTIC_UUID_COUNT1);
+                characteristic2 = await service.getCharacteristic(CHARACTERISTIC_UUID_COUNT2);
+                log('Characteristics found');
+
+                // Start notifications for both characteristics
+                await characteristic1.startNotifications();
+                await characteristic2.startNotifications();
+                log('Notifications started');
+
+                // Listen for value changes
+                characteristic1.addEventListener('characteristicvaluechanged', handleCount1Change);
+                characteristic2.addEventListener('characteristicvaluechanged', handleCount2Change);
+
+                // Read initial values using TextDecoder (since Arduino sends as string)
+                const decoder = new TextDecoder('utf-8');
+                const value1 = await characteristic1.readValue();
+                const value2 = await characteristic2.readValue();
+                const count1 = parseInt(decoder.decode(value1)) || 0;
+                const count2 = parseInt(decoder.decode(value2)) || 0;
+                count1El.textContent = count1;
+                count2El.textContent = count2;
+                log('Initial counts: Sensor1=' + count1 + ', Sensor2=' + count2);
+
+                // Show counts and enable disconnect
+                countsDiv.style.display = 'block';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+
+            } catch (error) {
+                console.error('Connection failed:', error);
+                log('Connection failed: ' + error.message);
+                statusEl.textContent = 'Status: Connection failed';
+            }
+        }
+
+        function handleCount1Change(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder('utf-8');
+            const count = parseInt(decoder.decode(value)) || 0;
+            count1El.textContent = count;
+            log('Sensor1 count updated: ' + count);
+        }
+
+        function handleCount2Change(event) {
+            const value = event.target.value;
+            const decoder = new TextDecoder('utf-8');
+            const count = parseInt(decoder.decode(value)) || 0;
+            count2El.textContent = count;
+            log('Sensor2 count updated: ' + count);
+        }
+
+        async function disconnect() {
+            if (device && device.gatt.connected) {
+                device.gatt.disconnect();
+                log('Disconnected');
+            }
+            statusEl.textContent = 'Status: Disconnected';
+            countsDiv.style.display = 'none';
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+        }
+
+        // Handle disconnection
+        navigator.bluetooth.addEventListener('availabilitychanged', event => {
+            if (!event.value) {
+                disconnect();
+            }
+        });
+    </script>
+</body>
+</html>
